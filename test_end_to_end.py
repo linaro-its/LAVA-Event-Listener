@@ -20,7 +20,7 @@ def setup():
         email="test@test.com",
         api_token="fake",
         project_key="TEST",
-        issue_type="Service Request",
+        request_type="Service Request",
     )
     state = StateManager("test_state.json")
     jira = JiraClient(jira_config)

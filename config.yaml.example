@@ -15,7 +15,8 @@ jira:
   email: "bot@example.com"
   api_token: "ATATT3xFfGF0..."
   project_key: "LAVAOPS"
-  issue_type: "Service Request"
+  # The JSM request type name (as shown in your project's request types settings)
+  request_type: "Service Request"
 
 # Path to the JSON file that tracks device-to-ticket mappings.
 # The directory must exist and be writable by the service user.

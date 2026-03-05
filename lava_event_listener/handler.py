@@ -29,7 +29,7 @@ class EventHandler:
         try:
             if health in BAD_HEALTH_STATUSES:
                 await self._handle_bad_health(
-                    loop, device_id, device, device_type, server_name, health, timestamp
+                    loop, device_id, device, device_type, server_name, health, device_state, timestamp
                 )
             elif health == "Good":
                 await self._handle_good_health(
@@ -39,7 +39,7 @@ class EventHandler:
             logger.exception("Jira error handling event for %s.", device_id)
 
     async def _handle_bad_health(
-        self, loop, device_id, device, device_type, server_name, health, timestamp
+        self, loop, device_id, device, device_type, server_name, health, device_state, timestamp
     ):
         existing = self._state.get_device(device_id)
 
@@ -65,8 +65,12 @@ class EventHandler:
 
         summary = f"[LAVA] {device} ({device_type}) health: {health} on {server_name}"
         description = (
-            f"Device {device} (type: {device_type}) on LAVA server "
-            f"{server_name} reported health {health} at {timestamp}.\n\n"
+            f"Device: {device}\n"
+            f"Device type: {device_type}\n"
+            f"LAVA server: {server_name}\n"
+            f"Health: {health}\n"
+            f"Device state: {device_state}\n"
+            f"Detected at: {timestamp}\n\n"
             f"This ticket was created automatically by the LAVA Event Listener."
         )
         ticket_key = await loop.run_in_executor(

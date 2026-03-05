@@ -31,7 +31,7 @@ class JiraConfig:
     email: str
     api_token: str
     project_key: str
-    issue_type: str = "Service Request"
+    request_type: str = "Service Request"
 
 
 @dataclass
@@ -95,7 +95,7 @@ def load_config(path: str) -> AppConfig:
         email=raw_jira["email"],
         api_token=raw_jira["api_token"],
         project_key=raw_jira["project_key"],
-        issue_type=raw_jira.get("issue_type", "Service Request"),
+        request_type=raw_jira.get("request_type", "Service Request"),
     )
 
     # Parse BetterStack config (optional)
