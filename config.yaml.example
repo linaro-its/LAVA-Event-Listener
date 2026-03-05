@@ -1,0 +1,35 @@
+# LAVA Event Listener Configuration
+
+lava_servers:
+  - name: "lab-1"
+    url: "https://lava.example.com/"
+    # Optional: credentials for authenticated websocket access
+    # username: "bot-user"
+    # token: "your-lava-token"
+
+  - name: "lab-2"
+    url: "https://lava2.example.com/"
+
+jira:
+  url: "https://yourorg.atlassian.net"
+  email: "bot@example.com"
+  api_token: "ATATT3xFfGF0..."
+  project_key: "LAVAOPS"
+  issue_type: "Service Request"
+
+# Path to the JSON file that tracks device-to-ticket mappings.
+# The directory must exist and be writable by the service user.
+state_file: "/var/lib/lava-event-listener/state.json"
+
+# Logging level: DEBUG, INFO, WARNING, ERROR
+log_level: "INFO"
+
+# Optional: Sentry error tracking. Remove or leave empty to disable.
+sentry:
+  dsn: "https://examplePublicKey@o0.ingest.sentry.io/0"
+
+# Optional: BetterStack heartbeat monitoring. Remove or leave empty to disable.
+# The heartbeat is only sent when at least one LAVA websocket connection is active.
+betterstack:
+  heartbeat_url: "https://uptime.betterstack.com/api/v1/heartbeat/your-heartbeat-id"
+  interval_seconds: 60

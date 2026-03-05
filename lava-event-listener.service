@@ -1,0 +1,23 @@
+[Unit]
+Description=LAVA Device Health Event Listener
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lava-listener
+Group=lava-listener
+ExecStart=/usr/bin/python3 -m lava_event_listener.main -c /etc/lava-event-listener/config.yaml
+Restart=on-failure
+RestartSec=10
+StateDirectory=lava-event-listener
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/lava-event-listener
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
