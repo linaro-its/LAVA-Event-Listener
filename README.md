@@ -93,11 +93,8 @@ sudo chmod 640 /etc/lava-event-listener/config.yaml
 
 ### 9. Install the systemd service
 
-Update the `ExecStart` path in the unit file to use the venv Python:
-
 ```bash
 sudo cp lava-event-listener.service /etc/systemd/system/
-sudo sed -i 's|/usr/bin/python3|/opt/lava-event-listener/.venv/bin/python|' /etc/systemd/system/lava-event-listener.service
 sudo systemctl daemon-reload
 ```
 
