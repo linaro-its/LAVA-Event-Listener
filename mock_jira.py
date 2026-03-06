@@ -55,11 +55,14 @@ class JiraHandler(BaseHTTPRequestHandler):
                 ],
             })
 
-        # Standard Jira get issue (used for status checks)
-        elif self.path.startswith("/rest/api/2/issue/"):
-            key = self.path.split("/")[5].split("?")[0]
+        # JSM get request status
+        elif self.path.startswith("/rest/servicedeskapi/request/") and "/comment" not in self.path:
+            key = self.path.split("/")[4]
             if key in TICKETS:
-                self._json_response(200, {"fields": {"status": {"name": TICKETS[key]["status"]}}})
+                self._json_response(200, {
+                    "issueKey": key,
+                    "currentStatus": {"status": TICKETS[key]["status"]},
+                })
             else:
                 self.send_response(404)
                 self.end_headers()

@@ -1,7 +1,6 @@
 """End-to-end test using the mock Jira server and synthetic LAVA events."""
 
 import asyncio
-import json
 import sys
 
 sys.path.insert(0, ".")
@@ -38,14 +37,15 @@ async def run_tests():
     device_state = state.get_device("test-lab/panda-01")
     assert device_state is not None, "Device should be tracked in state"
     assert device_state.health == "Bad"
-    print(f"  PASS: ticket={device_state.ticket_key}, health={device_state.health}")
+    ticket_1 = device_state.ticket_key
+    print(f"  PASS: ticket={ticket_1}, health={device_state.health}")
 
     print("\n=== Test 2: Same device, same health -> should NOT create duplicate ===")
     await handler.handle_device_event(
         "test-lab", "panda-01", "panda", "Bad", "Idle", "2026-03-05T10:01:00Z"
     )
     device_state2 = state.get_device("test-lab/panda-01")
-    assert device_state2.ticket_key == device_state.ticket_key, "Should reuse same ticket"
+    assert device_state2.ticket_key == ticket_1, "Should reuse same ticket"
     print(f"  PASS: still ticket={device_state2.ticket_key} (no duplicate)")
 
     print("\n=== Test 3: Health changes Bad -> Maintenance -> should comment ===")
@@ -53,35 +53,38 @@ async def run_tests():
         "test-lab", "panda-01", "panda", "Maintenance", "Idle", "2026-03-05T10:02:00Z"
     )
     device_state3 = state.get_device("test-lab/panda-01")
-    assert device_state3.ticket_key == device_state.ticket_key, "Should reuse same ticket"
+    assert device_state3.ticket_key == ticket_1, "Should reuse same ticket"
     assert device_state3.health == "Maintenance"
     print(f"  PASS: ticket={device_state3.ticket_key}, health updated to {device_state3.health}")
 
-    print("\n=== Test 4: Device recovers (Good) -> should comment and remove from state ===")
+    print("\n=== Test 4: Device recovers (Good) -> should comment and keep in state ===")
     await handler.handle_device_event(
         "test-lab", "panda-01", "panda", "Good", "Idle", "2026-03-05T10:03:00Z"
     )
     device_state4 = state.get_device("test-lab/panda-01")
-    assert device_state4 is None, "Device should be removed from state after recovery"
-    print(f"  PASS: device removed from state")
+    assert device_state4 is not None, "Device should still be in state (ticket is open)"
+    assert device_state4.ticket_key == ticket_1, "Should still reference same ticket"
+    assert device_state4.health == "Good"
+    print(f"  PASS: ticket={device_state4.ticket_key}, health={device_state4.health} (still in state)")
 
-    print("\n=== Test 5: Different device goes Bad -> should create separate ticket ===")
+    print("\n=== Test 5: Device flaps Bad again -> should comment on SAME ticket ===")
     await handler.handle_device_event(
-        "test-lab", "rk3399-02", "rk3399", "Bad", "Idle", "2026-03-05T10:04:00Z"
+        "test-lab", "panda-01", "panda", "Bad", "Idle", "2026-03-05T10:04:00Z"
     )
-    device_state5 = state.get_device("test-lab/rk3399-02")
+    device_state5 = state.get_device("test-lab/panda-01")
     assert device_state5 is not None
-    assert device_state5.ticket_key != device_state.ticket_key, "Should be a different ticket"
-    print(f"  PASS: ticket={device_state5.ticket_key} (different from first)")
+    assert device_state5.ticket_key == ticket_1, "Should reuse same ticket after flap"
+    assert device_state5.health == "Bad"
+    print(f"  PASS: ticket={device_state5.ticket_key} (same ticket, no duplicate)")
 
-    print("\n=== Test 6: Device goes Bad again after recovery -> should create NEW ticket ===")
+    print("\n=== Test 6: Different device goes Bad -> should create separate ticket ===")
     await handler.handle_device_event(
-        "test-lab", "panda-01", "panda", "Bad", "Idle", "2026-03-05T10:05:00Z"
+        "test-lab", "rk3399-02", "rk3399", "Bad", "Idle", "2026-03-05T10:05:00Z"
     )
-    device_state6 = state.get_device("test-lab/panda-01")
+    device_state6 = state.get_device("test-lab/rk3399-02")
     assert device_state6 is not None
-    assert device_state6.ticket_key != device_state.ticket_key, "Should be a new ticket"
-    print(f"  PASS: new ticket={device_state6.ticket_key} (previous was {device_state.ticket_key})")
+    assert device_state6.ticket_key != ticket_1, "Should be a different ticket"
+    print(f"  PASS: ticket={device_state6.ticket_key} (different from first)")
 
     print("\n=== Test 7: Unknown health -> should be ignored ===")
     await handler.handle_device_event(
@@ -90,6 +93,20 @@ async def run_tests():
     device_state7 = state.get_device("test-lab/juno-03")
     assert device_state7 is None, "Unknown health should not create a ticket"
     print(f"  PASS: no ticket created for Unknown health")
+
+    print("\n=== Test 8: Retired -> Bad (no Good in between) -> should comment, not new ticket ===")
+    await handler.handle_device_event(
+        "test-lab", "db845c-01", "dragonboard", "Retired", "Idle", "2026-03-05T11:00:00Z"
+    )
+    ds8a = state.get_device("test-lab/db845c-01")
+    retired_ticket = ds8a.ticket_key
+    await handler.handle_device_event(
+        "test-lab", "db845c-01", "dragonboard", "Bad", "Idle", "2026-03-05T11:01:00Z"
+    )
+    ds8b = state.get_device("test-lab/db845c-01")
+    assert ds8b.ticket_key == retired_ticket, "Should reuse ticket when going Retired -> Bad"
+    assert ds8b.health == "Bad"
+    print(f"  PASS: ticket={ds8b.ticket_key} (same ticket, Retired -> Bad)")
 
     print("\n" + "=" * 50)
     print("ALL TESTS PASSED")

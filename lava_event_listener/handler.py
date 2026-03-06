@@ -63,7 +63,7 @@ class EventHandler:
                     logger.info("Updated %s for %s: %s -> %s", existing.ticket_key, device_id, existing.health, health)
                 return
 
-        summary = f"[LAVA] {device} ({device_type}) health: {health} on {server_name}"
+        summary = f"[LAVA] {device}: {health} on {server_name}"
         description = (
             f"Device: {device}\n"
             f"Device type: {device_type}\n"
@@ -95,6 +95,8 @@ class EventHandler:
             await loop.run_in_executor(
                 None, self._jira.add_comment, existing.ticket_key, comment
             )
+            self._state.set_device(device_id, existing.ticket_key, "Good", timestamp)
             logger.info("Added recovery comment to %s for %s.", existing.ticket_key, device_id)
-
-        self._state.remove_device(device_id)
+        else:
+            self._state.remove_device(device_id)
+            logger.info("Ticket %s is closed, removing %s from state.", existing.ticket_key, device_id)

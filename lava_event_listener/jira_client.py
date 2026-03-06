@@ -121,8 +121,8 @@ class JiraClient:
 
     def get_issue_status(self, issue_key: str) -> str | None:
         try:
-            resp = self._request("GET", f"/rest/api/2/issue/{issue_key}", params={"fields": "status"})
-            return resp.json()["fields"]["status"]["name"]
+            resp = self._request("GET", f"/rest/servicedeskapi/request/{issue_key}")
+            return resp.json()["currentStatus"]["status"]
         except JiraError as exc:
             if "404" in str(exc):
                 logger.warning("Jira ticket %s not found.", issue_key)
