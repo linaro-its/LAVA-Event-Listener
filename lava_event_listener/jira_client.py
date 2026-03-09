@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 MAX_RETRIES = 5
 INITIAL_BACKOFF = 2  # seconds
 BACKOFF_FACTOR = 2
-TERMINAL_STATUSES = {"done", "closed", "resolved", "canceled", "cancelled"}
+TERMINAL_CATEGORIES = {"done"}
 
 
 class JiraError(Exception):
@@ -122,7 +122,7 @@ class JiraClient:
     def get_issue_status(self, issue_key: str) -> str | None:
         try:
             resp = self._request("GET", f"/rest/servicedeskapi/request/{issue_key}")
-            return resp.json()["currentStatus"]["status"]
+            return resp.json()["currentStatus"]["statusCategory"]
         except JiraError as exc:
             if "404" in str(exc):
                 logger.warning("Jira ticket %s not found.", issue_key)
@@ -130,7 +130,7 @@ class JiraClient:
             raise
 
     def is_issue_open(self, issue_key: str) -> bool:
-        status = self.get_issue_status(issue_key)
-        if status is None:
+        category = self.get_issue_status(issue_key)
+        if category is None:
             return False
-        return status.lower() not in TERMINAL_STATUSES
+        return category.lower() not in TERMINAL_CATEGORIES

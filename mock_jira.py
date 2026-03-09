@@ -22,7 +22,7 @@ class JiraHandler(BaseHTTPRequestHandler):
             key = f"TEST-{NEXT_ID}"
             NEXT_ID += 1
             summary = body.get("requestFieldValues", {}).get("summary", "")
-            TICKETS[key] = {"status": "Open", "summary": summary, "comments": []}
+            TICKETS[key] = {"status": "Open", "statusCategory": "NEW", "summary": summary, "comments": []}
             print(f"  CREATED ticket {key}: {summary}")
             self._json_response(201, {"issueKey": key, "issueId": str(NEXT_ID - 1)})
 
@@ -38,6 +38,22 @@ class JiraHandler(BaseHTTPRequestHandler):
         else:
             self.send_response(404)
             self.end_headers()
+
+    def do_PUT(self):
+        # Test helper: close a ticket
+        if self.path.startswith("/test/close-ticket/"):
+            key = self.path.split("/")[-1]
+            if key in TICKETS:
+                TICKETS[key]["status"] = "Completed"
+                TICKETS[key]["statusCategory"] = "DONE"
+                print(f"  CLOSED ticket {key}")
+                self._json_response(200, {"ok": True})
+            else:
+                self.send_response(404)
+                self.end_headers()
+            return
+        self.send_response(404)
+        self.end_headers()
 
     def do_GET(self):
         # JSM list service desks
@@ -61,7 +77,10 @@ class JiraHandler(BaseHTTPRequestHandler):
             if key in TICKETS:
                 self._json_response(200, {
                     "issueKey": key,
-                    "currentStatus": {"status": TICKETS[key]["status"]},
+                    "currentStatus": {
+                        "status": TICKETS[key]["status"],
+                        "statusCategory": TICKETS[key]["statusCategory"],
+                    },
                 })
             else:
                 self.send_response(404)

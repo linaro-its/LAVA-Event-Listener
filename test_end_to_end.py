@@ -3,6 +3,8 @@
 import asyncio
 import sys
 
+import requests
+
 sys.path.insert(0, ".")
 
 from lava_event_listener.config import JiraConfig
@@ -107,6 +109,33 @@ async def run_tests():
     assert ds8b.ticket_key == retired_ticket, "Should reuse ticket when going Retired -> Bad"
     assert ds8b.health == "Bad"
     print(f"  PASS: ticket={ds8b.ticket_key} (same ticket, Retired -> Bad)")
+
+    print("\n=== Test 9: Closed ticket -> Good event should NOT add comment ===")
+    # Create a device with a ticket, then close the ticket via mock helper
+    await handler.handle_device_event(
+        "test-lab", "hikey-01", "hikey", "Bad", "Idle", "2026-03-05T12:00:00Z"
+    )
+    ds9 = state.get_device("test-lab/hikey-01")
+    closed_ticket = ds9.ticket_key
+    # Close the ticket in mock Jira
+    requests.put(f"{JIRA_URL}/test/close-ticket/{closed_ticket}")
+    # Send a Good event — should NOT add a comment since ticket is closed
+    await handler.handle_device_event(
+        "test-lab", "hikey-01", "hikey", "Good", "Idle", "2026-03-05T12:01:00Z"
+    )
+    # Device should be removed from state since ticket is closed
+    ds9_after = state.get_device("test-lab/hikey-01")
+    assert ds9_after is None, "Device should be removed from state when ticket is closed"
+    print(f"  PASS: device removed from state (closed ticket {closed_ticket} not commented)")
+
+    print("\n=== Test 10: Closed ticket -> Bad event should create NEW ticket ===")
+    await handler.handle_device_event(
+        "test-lab", "hikey-01", "hikey", "Bad", "Idle", "2026-03-05T12:02:00Z"
+    )
+    ds10 = state.get_device("test-lab/hikey-01")
+    assert ds10 is not None, "Should create a new ticket"
+    assert ds10.ticket_key != closed_ticket, "Should be a NEW ticket, not the closed one"
+    print(f"  PASS: new ticket={ds10.ticket_key} (old closed ticket was {closed_ticket})")
 
     print("\n" + "=" * 50)
     print("ALL TESTS PASSED")
