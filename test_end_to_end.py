@@ -138,6 +138,90 @@ async def run_tests():
     print(f"  PASS: new ticket={ds10.ticket_key} (old closed ticket was {closed_ticket})")
 
     print("\n" + "=" * 50)
+    print("=== Worker Tests ===")
+
+    print("\n=== Test W1: Worker goes Offline -> should create ticket ===")
+    await handler.handle_worker_event(
+        "test-lab", "worker-01", "Active", "Offline", "2026-06-04T10:00:00Z"
+    )
+    ws1 = state.get_worker("test-lab/worker-01")
+    assert ws1 is not None, "Worker should be tracked in state"
+    assert ws1.health == "Active"
+    assert ws1.state == "Offline"
+    worker_ticket_1 = ws1.ticket_key
+    print(f"  PASS: ticket={worker_ticket_1}, health={ws1.health}, state={ws1.state}")
+
+    print("\n=== Test W2: Same worker, same condition -> should NOT create duplicate ===")
+    await handler.handle_worker_event(
+        "test-lab", "worker-01", "Active", "Offline", "2026-06-04T10:01:00Z"
+    )
+    ws2 = state.get_worker("test-lab/worker-01")
+    assert ws2.ticket_key == worker_ticket_1, "Should reuse same ticket"
+    print(f"  PASS: still ticket={ws2.ticket_key} (no duplicate)")
+
+    print("\n=== Test W3: Worker offline, health also -> Maintenance -> should comment ===")
+    await handler.handle_worker_event(
+        "test-lab", "worker-01", "Maintenance", "Offline", "2026-06-04T10:02:00Z"
+    )
+    ws3 = state.get_worker("test-lab/worker-01")
+    assert ws3.ticket_key == worker_ticket_1, "Should reuse same ticket"
+    assert ws3.health == "Maintenance"
+    assert ws3.state == "Offline"
+    print(f"  PASS: ticket={ws3.ticket_key}, condition updated to health={ws3.health} state={ws3.state}")
+
+    print("\n=== Test W4: Worker recovers (Active + Online) -> should comment and keep in state ===")
+    await handler.handle_worker_event(
+        "test-lab", "worker-01", "Active", "Online", "2026-06-04T10:03:00Z"
+    )
+    ws4 = state.get_worker("test-lab/worker-01")
+    assert ws4 is not None, "Worker should still be in state (ticket is open)"
+    assert ws4.ticket_key == worker_ticket_1
+    assert ws4.health == "Active"
+    assert ws4.state == "Online"
+    print(f"  PASS: ticket={ws4.ticket_key}, health={ws4.health}, state={ws4.state} (still in state)")
+
+    print("\n=== Test W5: Worker with no state goes Online/Active -> no action ===")
+    await handler.handle_worker_event(
+        "test-lab", "worker-99", "Active", "Online", "2026-06-04T10:04:00Z"
+    )
+    ws5 = state.get_worker("test-lab/worker-99")
+    assert ws5 is None, "Untracked worker recovering should not be added to state"
+    print(f"  PASS: no state created for untracked recovering worker")
+
+    print("\n=== Test W6: Worker health Retired -> should create ticket ===")
+    await handler.handle_worker_event(
+        "test-lab", "worker-02", "Retired", "Online", "2026-06-04T10:05:00Z"
+    )
+    ws6 = state.get_worker("test-lab/worker-02")
+    assert ws6 is not None
+    assert ws6.health == "Retired"
+    worker_ticket_2 = ws6.ticket_key
+    print(f"  PASS: ticket={worker_ticket_2}, health={ws6.health}")
+
+    print("\n=== Test W7: Closed ticket -> recovery should remove worker from state ===")
+    await handler.handle_worker_event(
+        "test-lab", "worker-03", "Active", "Offline", "2026-06-04T11:00:00Z"
+    )
+    ws7 = state.get_worker("test-lab/worker-03")
+    closed_worker_ticket = ws7.ticket_key
+    requests.put(f"{JIRA_URL}/test/close-ticket/{closed_worker_ticket}")
+    await handler.handle_worker_event(
+        "test-lab", "worker-03", "Active", "Online", "2026-06-04T11:01:00Z"
+    )
+    ws7_after = state.get_worker("test-lab/worker-03")
+    assert ws7_after is None, "Worker should be removed from state when ticket is closed"
+    print(f"  PASS: worker removed from state (closed ticket {closed_worker_ticket})")
+
+    print("\n=== Test W8: Closed ticket -> bad event should create NEW ticket ===")
+    await handler.handle_worker_event(
+        "test-lab", "worker-03", "Active", "Offline", "2026-06-04T11:02:00Z"
+    )
+    ws8 = state.get_worker("test-lab/worker-03")
+    assert ws8 is not None
+    assert ws8.ticket_key != closed_worker_ticket, "Should be a NEW ticket"
+    print(f"  PASS: new ticket={ws8.ticket_key} (old closed ticket was {closed_worker_ticket})")
+
+    print("\n" + "=" * 50)
     print("ALL TESTS PASSED")
 
 

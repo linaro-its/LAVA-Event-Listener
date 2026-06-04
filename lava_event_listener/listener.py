@@ -74,11 +74,11 @@ class LavaListener:
             return
 
         topic = message[0]
-        if not topic.endswith(".device"):
-            return
-
         timestamp = message[2]
         data_str = message[4]
+
+        if not (topic.endswith(".device") or topic.endswith(".worker")):
+            return
 
         try:
             data = json.loads(data_str) if isinstance(data_str, str) else data_str
@@ -86,19 +86,37 @@ class LavaListener:
             logger.warning("[%s] Bad data payload: %s", self._name, str(data_str)[:200])
             return
 
-        device = data.get("device", "unknown")
-        device_type = data.get("device_type", "unknown")
-        health = data.get("health", "")
-        device_state = data.get("state", "")
+        if topic.endswith(".device"):
+            device = data.get("device", "unknown")
+            device_type = data.get("device_type", "unknown")
+            health = data.get("health", "")
+            device_state = data.get("state", "")
 
-        logger.debug(
-            "[%s] Device event: %s health=%s state=%s",
-            self._name, device, health, device_state,
-        )
-
-        try:
-            await self._handler.handle_device_event(
-                self._name, device, device_type, health, device_state, timestamp
+            logger.debug(
+                "[%s] Device event: %s health=%s state=%s",
+                self._name, device, health, device_state,
             )
-        except Exception:
-            logger.exception("[%s] Error handling event for device %s", self._name, device)
+
+            try:
+                await self._handler.handle_device_event(
+                    self._name, device, device_type, health, device_state, timestamp
+                )
+            except Exception:
+                logger.exception("[%s] Error handling event for device %s", self._name, device)
+
+        elif topic.endswith(".worker"):
+            worker = data.get("hostname", "unknown")
+            health = data.get("health", "")
+            worker_state = data.get("state", "")
+
+            logger.debug(
+                "[%s] Worker event: %s health=%s state=%s",
+                self._name, worker, health, worker_state,
+            )
+
+            try:
+                await self._handler.handle_worker_event(
+                    self._name, worker, health, worker_state, timestamp
+                )
+            except Exception:
+                logger.exception("[%s] Error handling event for worker %s", self._name, worker)

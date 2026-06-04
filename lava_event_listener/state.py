@@ -15,11 +15,20 @@ class DeviceState:
     since: str
 
 
+@dataclass
+class WorkerState:
+    ticket_key: str
+    health: str
+    state: str
+    since: str
+
+
 class StateManager:
     def __init__(self, state_file: str):
         self._path = state_file
         self._lock = threading.Lock()
         self._devices: dict[str, DeviceState] = {}
+        self._workers: dict[str, WorkerState] = {}
         self._load()
 
     def _load(self):
@@ -36,10 +45,22 @@ class StateManager:
                     health=entry["health"],
                     since=entry["since"],
                 )
-            logger.info("Loaded state for %d devices.", len(self._devices))
+            for worker_id, entry in raw.get("workers", {}).items():
+                self._workers[worker_id] = WorkerState(
+                    ticket_key=entry["ticket_key"],
+                    health=entry["health"],
+                    state=entry["state"],
+                    since=entry["since"],
+                )
+            logger.info(
+                "Loaded state for %d devices, %d workers.",
+                len(self._devices),
+                len(self._workers),
+            )
         except (json.JSONDecodeError, KeyError) as exc:
             logger.warning("Failed to load state file %s: %s. Starting fresh.", self._path, exc)
             self._devices = {}
+            self._workers = {}
 
     def _save(self):
         data = {
@@ -50,7 +71,16 @@ class StateManager:
                     "since": state.since,
                 }
                 for device_id, state in self._devices.items()
-            }
+            },
+            "workers": {
+                worker_id: {
+                    "ticket_key": state.ticket_key,
+                    "health": state.health,
+                    "state": state.state,
+                    "since": state.since,
+                }
+                for worker_id, state in self._workers.items()
+            },
         }
         parent = os.path.dirname(self._path) or "."
         try:
@@ -79,4 +109,24 @@ class StateManager:
         with self._lock:
             if device_id in self._devices:
                 del self._devices[device_id]
+                self._save()
+
+    def get_worker(self, worker_id: str) -> WorkerState | None:
+        with self._lock:
+            return self._workers.get(worker_id)
+
+    def set_worker(self, worker_id: str, ticket_key: str, health: str, state: str, since: str):
+        with self._lock:
+            self._workers[worker_id] = WorkerState(
+                ticket_key=ticket_key,
+                health=health,
+                state=state,
+                since=since,
+            )
+            self._save()
+
+    def remove_worker(self, worker_id: str):
+        with self._lock:
+            if worker_id in self._workers:
+                del self._workers[worker_id]
                 self._save()
