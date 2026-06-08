@@ -3,9 +3,16 @@
 lava_servers:
   - name: "lab-1"
     url: "https://lava.example.com/"
-    # Optional: credentials for authenticated websocket access
+    # Optional: credentials for authenticated websocket access and REST API calls.
+    # The token is reused for both; it must belong to a user with permission to submit jobs.
     # username: "bot-user"
     # token: "your-lava-token"
+    # Optional: automatically trigger a healthcheck job when a DUT failure is detected.
+    # Requires 'token' to be set. Omit or set enabled: false to disable.
+    # healthcheck:
+    #   enabled: true
+    #   poll_interval_seconds: 30   # how often to check job status (default: 30)
+    #   timeout_minutes: 30         # give up polling after this many minutes (default: 30)
 
   - name: "lab-2"
     url: "https://lava2.example.com/"

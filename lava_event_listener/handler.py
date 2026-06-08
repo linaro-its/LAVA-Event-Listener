@@ -1,7 +1,9 @@
 import asyncio
 import logging
 
+from .config import LavaServerConfig
 from .jira_client import JiraClient, JiraError
+from .lava_client import LavaClient, LavaError
 from .state import StateManager
 
 logger = logging.getLogger(__name__)
@@ -13,9 +15,10 @@ BAD_WORKER_STATE = {"Offline"}
 
 
 class EventHandler:
-    def __init__(self, jira: JiraClient, state: StateManager):
+    def __init__(self, jira: JiraClient, state: StateManager, servers: list[LavaServerConfig] | None = None):
         self._jira = jira
         self._state = state
+        self._servers: dict[str, LavaServerConfig] = {s.name: s for s in (servers or [])}
 
     async def handle_device_event(
         self,
@@ -81,6 +84,93 @@ class EventHandler:
         )
         self._state.set_device(device_id, ticket_key, health, timestamp)
         logger.info("Created %s for %s (health: %s).", ticket_key, device_id, health)
+
+        srv_config = self._servers.get(server_name)
+        if srv_config and srv_config.healthcheck.enabled:
+            if srv_config.token:
+                asyncio.ensure_future(
+                    self._run_healthcheck_and_report(srv_config, device, ticket_key)
+                )
+            else:
+                logger.warning(
+                    "Healthcheck enabled for %s but no token configured — skipping.", server_name
+                )
+
+    async def _run_healthcheck_and_report(
+        self, srv_config: LavaServerConfig, device: str, ticket_key: str
+    ):
+        hc = srv_config.healthcheck
+        lava = LavaClient(srv_config)
+        loop = asyncio.get_running_loop()
+
+        try:
+            job_id = await loop.run_in_executor(None, lava.submit_healthcheck, device)
+        except LavaError:
+            logger.exception("Failed to submit healthcheck for %s on %s.", device, srv_config.name)
+            await loop.run_in_executor(
+                None,
+                self._jira.add_comment,
+                ticket_key,
+                f"Healthcheck could not be submitted for {device}: see listener logs for details.",
+            )
+            return
+
+        job_url = lava.job_url(job_id)
+        await loop.run_in_executor(
+            None,
+            self._jira.add_comment,
+            ticket_key,
+            f"Healthcheck job submitted: {job_url}\nJob ID: {job_id} — polling for results...",
+        )
+
+        deadline = hc.timeout_minutes * 60
+        elapsed = 0
+        status = None
+
+        while elapsed < deadline:
+            await asyncio.sleep(hc.poll_interval_seconds)
+            elapsed += hc.poll_interval_seconds
+            try:
+                status = await loop.run_in_executor(None, lava.get_job_status, job_id)
+            except LavaError:
+                logger.warning("Error polling healthcheck job %d for %s; will retry.", job_id, device)
+                continue
+
+            if status["state"] == "Finished":
+                break
+        else:
+            await loop.run_in_executor(
+                None,
+                self._jira.add_comment,
+                ticket_key,
+                f"Healthcheck job {job_id} did not finish within {hc.timeout_minutes} minutes.\n"
+                f"Check manually: {job_url}",
+            )
+            logger.warning("Healthcheck job %d for %s timed out after %d min.", job_id, device, hc.timeout_minutes)
+            return
+
+        health = status["health"]
+        failure_tags = status["failure_tags"]
+        failure_comment = status["failure_comment"]
+
+        if health == "Complete":
+            result_line = "Healthcheck result: PASS"
+        else:
+            result_line = f"Healthcheck result: {health.upper() if health else 'UNKNOWN'}"
+
+        lines = [result_line, f"Job ID: {job_id} — {job_url}"]
+        if failure_tags:
+            lines.append(f"Failure tags: {', '.join(failure_tags)}")
+        if failure_comment:
+            lines.append(f"Failure comment: {failure_comment}")
+
+        await loop.run_in_executor(
+            None,
+            self._jira.add_comment,
+            ticket_key,
+            "\n".join(lines),
+        )
+        logger.info("Healthcheck job %d for %s finished: %s.", job_id, device, health)
 
     async def _handle_good_health(self, loop, device_id, device, server_name, timestamp):
         existing = self._state.get_device(device_id)

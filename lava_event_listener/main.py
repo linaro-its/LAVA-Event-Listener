@@ -68,7 +68,7 @@ def main():
 
     state = StateManager(config.state_file)
     jira = JiraClient(config.jira)
-    handler = EventHandler(jira, state)
+    handler = EventHandler(jira, state, config.lava_servers)
 
     listeners = [LavaListener(srv, handler) for srv in config.lava_servers]
 

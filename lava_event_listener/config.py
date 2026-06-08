@@ -7,11 +7,19 @@ import yaml
 
 
 @dataclass
+class HealthcheckConfig:
+    enabled: bool = False
+    poll_interval_seconds: int = 30
+    timeout_minutes: int = 30
+
+
+@dataclass
 class LavaServerConfig:
     name: str
     url: str
     token: str | None = None
     username: str | None = None
+    healthcheck: HealthcheckConfig = field(default_factory=HealthcheckConfig)
 
     @property
     def ws_url(self) -> str:
@@ -76,11 +84,18 @@ def load_config(path: str) -> AppConfig:
         if not name or not url:
             print(f"LAVA server #{i + 1} must have 'name' and 'url'.", file=sys.stderr)
             sys.exit(1)
+        raw_hc = srv.get("healthcheck") or {}
+        healthcheck = HealthcheckConfig(
+            enabled=bool(raw_hc.get("enabled", False)),
+            poll_interval_seconds=int(raw_hc.get("poll_interval_seconds", 30)),
+            timeout_minutes=int(raw_hc.get("timeout_minutes", 30)),
+        )
         servers.append(LavaServerConfig(
             name=name,
             url=url,
             token=srv.get("token"),
             username=srv.get("username"),
+            healthcheck=healthcheck,
         ))
 
     # Parse Jira config
