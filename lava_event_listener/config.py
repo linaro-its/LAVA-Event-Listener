@@ -20,6 +20,7 @@ class LavaServerConfig:
     token: str | None = None
     username: str | None = None
     healthcheck: HealthcheckConfig = field(default_factory=HealthcheckConfig)
+    participants: list[str] = field(default_factory=list)
 
     @property
     def ws_url(self) -> str:
@@ -96,6 +97,7 @@ def load_config(path: str) -> AppConfig:
             token=srv.get("token"),
             username=srv.get("username"),
             healthcheck=healthcheck,
+            participants=srv.get("participants") or [],
         ))
 
     # Parse Jira config

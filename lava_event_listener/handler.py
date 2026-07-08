@@ -86,6 +86,10 @@ class EventHandler:
         logger.info("Created %s for %s (health: %s).", ticket_key, device_id, health)
 
         srv_config = self._servers.get(server_name)
+        if srv_config and srv_config.participants:
+            await loop.run_in_executor(
+                None, self._jira.add_participants, ticket_key, srv_config.participants
+            )
         if srv_config and srv_config.healthcheck.enabled:
             if srv_config.token:
                 asyncio.ensure_future(
@@ -260,6 +264,12 @@ class EventHandler:
         )
         self._state.set_worker(worker_id, ticket_key, health, worker_state, timestamp)
         logger.info("Created %s for %s (health: %s, state: %s).", ticket_key, worker_id, health, worker_state)
+
+        srv_config = self._servers.get(server_name)
+        if srv_config and srv_config.participants:
+            await loop.run_in_executor(
+                None, self._jira.add_participants, ticket_key, srv_config.participants
+            )
 
     async def _handle_recovered_worker(
         self, loop, worker_id, worker, server_name, health, worker_state, timestamp

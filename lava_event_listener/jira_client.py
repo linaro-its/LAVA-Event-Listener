@@ -27,6 +27,7 @@ class JiraClient:
         self._session.headers["Content-Type"] = "application/json"
         self._service_desk_id: str | None = None
         self._request_type_id: str | None = None
+        self._account_id_cache: dict[str, str] = {}
 
     def _request(self, method: str, path: str, **kwargs) -> requests.Response:
         url = f"{self._url}{path}"
@@ -109,6 +110,61 @@ class JiraClient:
         key = resp.json()["issueKey"]
         logger.info("Created JSM ticket %s: %s", key, summary)
         return key
+
+    def _resolve_email_to_account_id(self, email: str) -> str | None:
+        if email in self._account_id_cache:
+            return self._account_id_cache[email]
+        try:
+            resp = self._request("GET", "/rest/api/3/user/search", params={"query": email})
+        except JiraError:
+            logger.warning("Failed to search for Jira user '%s'.", email)
+            return None
+        for user in resp.json():
+            if user.get("emailAddress", "").lower() == email.lower():
+                account_id = user["accountId"]
+                self._account_id_cache[email] = account_id
+                return account_id
+        logger.warning("No Jira account found for email '%s'.", email)
+        return None
+
+    def add_participants(self, issue_key: str, emails: list[str]) -> None:
+        resolved: list[tuple[str, str]] = []
+        unresolved: list[str] = []
+        for email in emails:
+            account_id = self._resolve_email_to_account_id(email)
+            if account_id:
+                resolved.append((email, account_id))
+            else:
+                unresolved.append(email)
+
+        comment_lines: list[str] = []
+
+        if resolved:
+            try:
+                self._request(
+                    "POST",
+                    f"/rest/servicedeskapi/request/{issue_key}/participant",
+                    json={"accountIds": [aid for _, aid in resolved]},
+                )
+                added = ", ".join(email for email, _ in resolved)
+                comment_lines.append(f"Request participants added: {added}")
+                logger.info("Added participants to %s: %s", issue_key, added)
+            except JiraError as exc:
+                failed = ", ".join(email for email, _ in resolved)
+                comment_lines.append(f"Failed to add request participants ({failed}): {exc}")
+                logger.warning("Failed to add participants to %s: %s", issue_key, exc)
+        else:
+            comment_lines.append(
+                "Could not add any request participants — no Jira accounts found for: "
+                + ", ".join(emails)
+            )
+
+        if unresolved:
+            comment_lines.append(
+                "Could not resolve to a Jira account (skipped): " + ", ".join(unresolved)
+            )
+
+        self.add_comment(issue_key, "\n".join(comment_lines))
 
     def add_comment(self, issue_key: str, comment: str):
         payload = {"body": comment, "public": True}

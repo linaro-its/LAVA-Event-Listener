@@ -13,6 +13,10 @@ lava_servers:
     #   enabled: true
     #   poll_interval_seconds: 30   # how often to check job status (default: 30)
     #   timeout_minutes: 30         # give up polling after this many minutes (default: 30)
+    # Optional: Jira accounts to add as "Request participants" on newly created tickets.
+    # participants:
+    #   - user@example.com
+    #   - another@example.com
 
   - name: "lab-2"
     url: "https://lava2.example.com/"
