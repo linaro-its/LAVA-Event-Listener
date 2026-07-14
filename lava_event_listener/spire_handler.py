@@ -158,30 +158,36 @@ class SpireHandler:
         Raises _UnresolvedSubscription if not found in either environment.
         """
         # Try production first
-        appliance = self._lms_prod.get_appliance_by_name(laa_name)
-        if appliance:
-            subscription_id = (
-                appliance.get("subscription_id")
-                or appliance.get("subscription", {}).get("id")
-            )
-            appliance_uuid = appliance.get("id", "")
-            if subscription_id:
-                sub = self._spire_prod.get_subscription(subscription_id)
-                if sub:
-                    return ("production", subscription_id, appliance_uuid)
+        try:
+            appliance = self._lms_prod.get_appliance_by_name(laa_name)
+            if appliance:
+                subscription_id = (
+                    appliance.get("subscription_id")
+                    or appliance.get("subscription", {}).get("id")
+                )
+                appliance_uuid = appliance.get("id", "")
+                if subscription_id:
+                    sub = self._spire_prod.get_subscription(subscription_id)
+                    if sub:
+                        return ("production", subscription_id, appliance_uuid)
+        except (LmsError, SpireError) as exc:
+            logger.debug("Production lookup failed for %s, trying staging: %s", laa_name, exc)
 
         # Try staging
-        appliance = self._lms_staging.get_appliance_by_name(laa_name)
-        if appliance:
-            subscription_id = (
-                appliance.get("subscription_id")
-                or appliance.get("subscription", {}).get("id")
-            )
-            appliance_uuid = appliance.get("id", "")
-            if subscription_id:
-                sub = self._spire_staging.get_subscription(subscription_id)
-                if sub:
-                    return ("staging", subscription_id, appliance_uuid)
+        try:
+            appliance = self._lms_staging.get_appliance_by_name(laa_name)
+            if appliance:
+                subscription_id = (
+                    appliance.get("subscription_id")
+                    or appliance.get("subscription", {}).get("id")
+                )
+                appliance_uuid = appliance.get("id", "")
+                if subscription_id:
+                    sub = self._spire_staging.get_subscription(subscription_id)
+                    if sub:
+                        return ("staging", subscription_id, appliance_uuid)
+        except (LmsError, SpireError) as exc:
+            logger.debug("Staging lookup failed for %s: %s", laa_name, exc)
 
         raise _UnresolvedSubscription(f"Subscription not found for device {device} (LAA: {laa_name})")
 
