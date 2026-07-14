@@ -41,6 +41,10 @@ class SpireHandler:
         health: str,
         timestamp: str,
     ):
+        logger.info(
+            "[%s] SPIRE handler received event: server=%s, device_type=%s, health=%s, timestamp=%s",
+            device, server_name, device_type, health, timestamp,
+        )
         if health == "Unknown":
             await self._handle_device_appeared(server_name, device, device_type, timestamp)
         elif health == "Retired":
@@ -159,35 +163,55 @@ class SpireHandler:
         """
         # Try production first
         try:
+            logger.info("[%s] Trying production LMS for appliance '%s'...", device, laa_name)
             appliance = self._lms_prod.get_appliance_by_name(laa_name)
             if appliance:
+                logger.info("[%s] Production LMS found appliance: id=%s", device, appliance.get("id"))
                 subscription_id = (
                     appliance.get("subscription_id")
                     or appliance.get("subscription", {}).get("id")
                 )
                 appliance_uuid = appliance.get("id", "")
                 if subscription_id:
+                    logger.info("[%s] Appliance has subscription_id=%s, verifying in production SPIRE...", device, subscription_id)
                     sub = self._spire_prod.get_subscription(subscription_id)
                     if sub:
+                        logger.info("[%s] Resolved: production, subscription=%s, appliance=%s", device, subscription_id, appliance_uuid)
                         return ("production", subscription_id, appliance_uuid)
+                    else:
+                        logger.info("[%s] Subscription %s not found in production SPIRE.", device, subscription_id)
+                else:
+                    logger.info("[%s] Production appliance has no subscription_id. Raw: %s", device, appliance)
+            else:
+                logger.info("[%s] Appliance '%s' not found in production LMS.", device, laa_name)
         except (LmsError, SpireError) as exc:
-            logger.debug("Production lookup failed for %s, trying staging: %s", laa_name, exc)
+            logger.info("[%s] Production lookup failed: %s", device, exc)
 
         # Try staging
         try:
+            logger.info("[%s] Trying staging LMS for appliance '%s'...", device, laa_name)
             appliance = self._lms_staging.get_appliance_by_name(laa_name)
             if appliance:
+                logger.info("[%s] Staging LMS found appliance: id=%s", device, appliance.get("id"))
                 subscription_id = (
                     appliance.get("subscription_id")
                     or appliance.get("subscription", {}).get("id")
                 )
                 appliance_uuid = appliance.get("id", "")
                 if subscription_id:
+                    logger.info("[%s] Appliance has subscription_id=%s, verifying in staging SPIRE...", device, subscription_id)
                     sub = self._spire_staging.get_subscription(subscription_id)
                     if sub:
+                        logger.info("[%s] Resolved: staging, subscription=%s, appliance=%s", device, subscription_id, appliance_uuid)
                         return ("staging", subscription_id, appliance_uuid)
+                    else:
+                        logger.info("[%s] Subscription %s not found in staging SPIRE.", device, subscription_id)
+                else:
+                    logger.info("[%s] Staging appliance has no subscription_id. Raw: %s", device, appliance)
+            else:
+                logger.info("[%s] Appliance '%s' not found in staging LMS.", device, laa_name)
         except (LmsError, SpireError) as exc:
-            logger.debug("Staging lookup failed for %s: %s", laa_name, exc)
+            logger.info("[%s] Staging lookup failed: %s", device, exc)
 
         raise _UnresolvedSubscription(f"Subscription not found for device {device} (LAA: {laa_name})")
 
