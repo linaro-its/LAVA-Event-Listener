@@ -24,7 +24,7 @@ lava_servers:
 jira:
   url: "https://yourorg.atlassian.net"
   email: "bot@example.com"
-  api_token: "ATATT3xFfGF0..."
+  api_token: "your-jira-api-token"
   project_key: "LAVAOPS"
   # The JSM request type name (as shown in your project's request types settings)
   request_type: "Service Request"
@@ -45,3 +45,32 @@ sentry:
 betterstack:
   heartbeat_url: "https://uptime.betterstack.com/api/v1/heartbeat/your-heartbeat-id"
   interval_seconds: 60
+
+# Optional: SPIRE integration for LAA-connected devices (Tier 3).
+# When configured, the listener will automatically create/delete SPIRE DUT resources
+# in response to device Unknown/Retired health transitions on LAA devices.
+# Both production and staging credentials are required because a single LAVA server
+# may host devices belonging to subscriptions in either environment.
+# spire:
+#   cache_dir: "/var/lib/lava-event-listener"   # directory for biscuit token caches
+#   production:
+#     auth0_domain: "linaro-production.auth0.com"
+#     auth0_client_id: "your-prod-m2m-client-id"
+#     auth0_client_secret: "your-prod-m2m-client-secret"
+#     auth0_audience: "https://spire-api.linaro.org"
+#     spire_api_base: "https://spire-api.linaro.org/rest/v1"
+#     lms_base: "https://lms-api.linaro.org/rest/v1"
+#   staging:
+#     auth0_domain: "linaro-staging.auth0.com"
+#     auth0_client_id: "your-staging-m2m-client-id"
+#     auth0_client_secret: "your-staging-m2m-client-secret"
+#     auth0_audience: "https://spire-api-staging.linaro.org"
+#     spire_api_base: "https://spire-api-staging.linaro.org/rest/v1"
+#     lms_base: "https://lms-api-staging.linaro.org/rest/v1"
+
+# Optional: Slack alerting for SPIRE sync failures.
+# Posts to a Slack incoming webhook when SPIRE operations fail after retries.
+# slack:
+#   webhook_url: "your-slack-incoming-webhook-url"
+#   alert_rate_limit_seconds: 600           # minimum seconds between alerts per device (default: 600)
+#   alert_on_unresolved_subscription: true  # notify when subscription can't be resolved (default: true)

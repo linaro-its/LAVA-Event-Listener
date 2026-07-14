@@ -9,6 +9,8 @@ from .handler import EventHandler
 from .heartbeat import run_heartbeat
 from .jira_client import JiraClient
 from .listener import LavaListener
+from .slack_client import SlackClient
+from .spire_handler import SpireHandler
 from .state import StateManager
 
 logger = logging.getLogger(__name__)
@@ -68,7 +70,19 @@ def main():
 
     state = StateManager(config.state_file)
     jira = JiraClient(config.jira)
-    handler = EventHandler(jira, state, config.lava_servers)
+
+    slack = None
+    if config.slack:
+        dead_letter_path = f"{config.state_file.rsplit('/', 1)[0] if '/' in config.state_file else '.'}/dead_letter.jsonl"
+        slack = SlackClient(config.slack, dead_letter_path)
+        logger.info("Slack alerting enabled (rate limit: %ds).", config.slack.alert_rate_limit_seconds)
+
+    spire_handler = None
+    if config.spire:
+        spire_handler = SpireHandler(config.spire, slack=slack, slack_config=config.slack)
+        logger.info("SPIRE handler enabled for LAA device events.")
+
+    handler = EventHandler(jira, state, config.lava_servers, spire_handler=spire_handler)
 
     listeners = [LavaListener(srv, handler) for srv in config.lava_servers]
 
@@ -83,7 +97,14 @@ def main():
         heartbeat_coro = run_heartbeat(config.betterstack, listeners)
         logger.info("BetterStack heartbeat enabled (interval: %ds).", config.betterstack.interval_seconds)
 
-    asyncio.run(run_all(listeners, heartbeat_coro))
+    if slack:
+        slack.send_startup()
+
+    try:
+        asyncio.run(run_all(listeners, heartbeat_coro))
+    finally:
+        if slack:
+            slack.send_shutdown()
 
 
 if __name__ == "__main__":

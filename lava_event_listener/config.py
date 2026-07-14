@@ -50,6 +50,30 @@ class BetterStackConfig:
 
 
 @dataclass
+class SpireEnvironmentConfig:
+    auth0_domain: str
+    auth0_client_id: str
+    auth0_client_secret: str
+    auth0_audience: str
+    spire_api_base: str
+    lms_base: str
+
+
+@dataclass
+class SpireConfig:
+    production: SpireEnvironmentConfig
+    staging: SpireEnvironmentConfig
+    cache_dir: str = "/var/lib/lava-event-listener"
+
+
+@dataclass
+class SlackConfig:
+    webhook_url: str
+    alert_rate_limit_seconds: int = 600
+    alert_on_unresolved_subscription: bool = True
+
+
+@dataclass
 class AppConfig:
     lava_servers: list[LavaServerConfig]
     jira: JiraConfig
@@ -57,6 +81,8 @@ class AppConfig:
     log_level: str = "INFO"
     sentry_dsn: str | None = None
     betterstack: BetterStackConfig | None = None
+    spire: SpireConfig | None = None
+    slack: SlackConfig | None = None
 
 
 def load_config(path: str) -> AppConfig:
@@ -124,6 +150,50 @@ def load_config(path: str) -> AppConfig:
             interval_seconds=raw_bs.get("interval_seconds", 60),
         )
 
+    # Parse SPIRE config (optional)
+    spire = None
+    raw_spire = raw.get("spire")
+    if raw_spire:
+        envs = {}
+        for env_name in ("production", "staging"):
+            raw_env = raw_spire.get(env_name)
+            if not raw_env:
+                print(f"SPIRE config must include '{env_name}' environment.", file=sys.stderr)
+                sys.exit(1)
+            for key in (
+                "auth0_domain", "auth0_client_id", "auth0_client_secret", "auth0_audience",
+                "spire_api_base", "lms_base",
+            ):
+                if not raw_env.get(key):
+                    print(f"SPIRE {env_name} config must include '{key}'.", file=sys.stderr)
+                    sys.exit(1)
+            envs[env_name] = SpireEnvironmentConfig(
+                auth0_domain=raw_env["auth0_domain"],
+                auth0_client_id=raw_env["auth0_client_id"],
+                auth0_client_secret=raw_env["auth0_client_secret"],
+                auth0_audience=raw_env["auth0_audience"],
+                spire_api_base=raw_env["spire_api_base"],
+                lms_base=raw_env["lms_base"],
+            )
+        spire = SpireConfig(
+            production=envs["production"],
+            staging=envs["staging"],
+            cache_dir=raw_spire.get("cache_dir", "/var/lib/lava-event-listener"),
+        )
+
+    # Parse Slack config (optional)
+    slack = None
+    raw_slack = raw.get("slack")
+    if raw_slack:
+        if not raw_slack.get("webhook_url"):
+            print("Slack config must include 'webhook_url'.", file=sys.stderr)
+            sys.exit(1)
+        slack = SlackConfig(
+            webhook_url=raw_slack["webhook_url"],
+            alert_rate_limit_seconds=int(raw_slack.get("alert_rate_limit_seconds", 600)),
+            alert_on_unresolved_subscription=bool(raw_slack.get("alert_on_unresolved_subscription", True)),
+        )
+
     # Validate state file directory exists
     state_file = raw.get("state_file", "state.json")
     state_dir = Path(state_file).parent
@@ -138,4 +208,6 @@ def load_config(path: str) -> AppConfig:
         log_level=raw.get("log_level", "INFO"),
         sentry_dsn=raw.get("sentry", {}).get("dsn") if raw.get("sentry") else None,
         betterstack=betterstack,
+        spire=spire,
+        slack=slack,
     )
