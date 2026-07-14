@@ -4,21 +4,30 @@ import logging
 from .config import LavaServerConfig
 from .jira_client import JiraClient, JiraError
 from .lava_client import LavaClient, LavaError
+from .spire_handler import SpireHandler, is_laa_device
 from .state import StateManager
 
 logger = logging.getLogger(__name__)
 
 BAD_HEALTH_STATUSES = {"Bad", "Maintenance", "Retired"}
+LAA_LIFECYCLE_HEALTH = {"Unknown", "Retired"}
 
 BAD_WORKER_HEALTH = {"Maintenance", "Retired"}
 BAD_WORKER_STATE = {"Offline"}
 
 
 class EventHandler:
-    def __init__(self, jira: JiraClient, state: StateManager, servers: list[LavaServerConfig] | None = None):
+    def __init__(
+        self,
+        jira: JiraClient,
+        state: StateManager,
+        servers: list[LavaServerConfig] | None = None,
+        spire_handler: SpireHandler | None = None,
+    ):
         self._jira = jira
         self._state = state
         self._servers: dict[str, LavaServerConfig] = {s.name: s for s in (servers or [])}
+        self._spire_handler = spire_handler
 
     async def handle_device_event(
         self,
@@ -31,6 +40,31 @@ class EventHandler:
     ):
         device_id = f"{server_name}/{device}"
         loop = asyncio.get_running_loop()
+
+        # LAA devices: route Unknown/Retired to SPIRE handler, skip Jira for those
+        if is_laa_device(device) and self._spire_handler:
+            if health in LAA_LIFECYCLE_HEALTH:
+                await self._spire_handler.handle_device_event(
+                    server_name, device, device_type, health, timestamp
+                )
+                return
+            # Bad/Maintenance still gets a Jira ticket for LAA devices
+            if health in {"Bad", "Maintenance"}:
+                try:
+                    await self._handle_bad_health(
+                        loop, device_id, device, device_type, server_name, health, device_state, timestamp
+                    )
+                except JiraError:
+                    logger.exception("Jira error handling event for %s.", device_id)
+                return
+            if health == "Good":
+                try:
+                    await self._handle_good_health(
+                        loop, device_id, device, server_name, timestamp
+                    )
+                except JiraError:
+                    logger.exception("Jira error handling event for %s.", device_id)
+                return
 
         try:
             if health in BAD_HEALTH_STATUSES:
