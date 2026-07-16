@@ -79,7 +79,12 @@ def main():
 
     spire_handler = None
     if config.spire:
-        spire_handler = SpireHandler(config.spire, slack=slack, slack_config=config.slack)
+        spire_handler = SpireHandler(
+            config.spire,
+            servers=config.lava_servers,
+            slack=slack,
+            slack_config=config.slack,
+        )
         logger.info("SPIRE handler enabled for LAA device events.")
 
     handler = EventHandler(jira, state, config.lava_servers, spire_handler=spire_handler)

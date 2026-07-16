@@ -51,6 +51,10 @@ betterstack:
 # in response to device Unknown/Retired health transitions on LAA devices.
 # Both production and staging credentials are required because a single LAVA server
 # may host devices belonging to subscriptions in either environment.
+# The subscription and appliance are resolved from the device's LAVA tags
+# (sub-<uuid> / dev-<uuid>), so the matching lava_servers entry should have a
+# 'token' set so the listener can read device tags via the LAVA REST API. If the
+# device has no such tags, the listener falls back to looking the LAA up in LMS.
 # spire:
 #   cache_dir: "/var/lib/lava-event-listener"   # directory for biscuit token caches
 #   production:

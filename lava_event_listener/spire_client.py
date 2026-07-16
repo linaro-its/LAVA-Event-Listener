@@ -19,6 +19,11 @@ class SpireError(Exception):
     pass
 
 
+def _prefixed_subscription_id(subscription_id: str) -> str:
+    """SPIRE expects subscription ids in 'sub:<uuid>' form; tags/LMS give raw UUIDs."""
+    return subscription_id if subscription_id.startswith("sub:") else f"sub:{subscription_id}"
+
+
 class SpireClient:
     def __init__(self, config: SpireEnvironmentConfig, cache_file: str):
         self._config = config
@@ -27,6 +32,7 @@ class SpireClient:
         self._session.headers["Content-Type"] = "application/json"
         self._biscuit: str | None = None
         self._biscuit_expires_at: float = 0
+        self._type_id_cache: dict[str, str] = {}
 
     def get_biscuit(self) -> str:
         self._ensure_biscuit()
@@ -51,19 +57,50 @@ class SpireClient:
     def get_subscription(self, subscription_id: str) -> dict | None:
         self._ensure_biscuit()
         try:
-            resp = self._request("GET", f"/subscription/{subscription_id}")
+            prefixed = _prefixed_subscription_id(subscription_id)
+            resp = self._request(
+                "GET", f"/subscription/{requests.utils.quote(prefixed, safe='')}"
+            )
             return resp.json().get("data")
         except SpireError as exc:
             if "404" in str(exc):
                 return None
             raise
 
+    def resolve_resource_type_id(self, service_name: str, type_name: str) -> str:
+        """Resolve a SPIRE resource type to its prefixed 'type:<uuid>' id (cached)."""
+        cache_key = f"{service_name}:{type_name}"
+        if cache_key in self._type_id_cache:
+            return self._type_id_cache[cache_key]
+
+        self._ensure_biscuit()
+        services = self._request("GET", "/services").json()["data"]
+        service = next((s for s in services if s.get("id") == f"service:{service_name}"), None)
+        if not service:
+            raise SpireError(f"SPIRE service '{service_name}' not found")
+
+        types = self._request(
+            "GET", f"/service/{service['id']}/resource_types"
+        ).json()["data"]
+        resource_type = next((t for t in types if t.get("name") == type_name), None)
+        if not resource_type:
+            raise SpireError(
+                f"Resource type '{type_name}' not found in service '{service_name}'"
+            )
+
+        self._type_id_cache[cache_key] = resource_type["id"]
+        return resource_type["id"]
+
+    def get_dut_type_id(self) -> str:
+        """The SPIRE resource type id for LAVA DUTs (service 'lms', type 'dut')."""
+        return self.resolve_resource_type_id("lms", "dut")
+
     def create_resource(self, name: str, type_id: str, subscription_id: str, external_id: str) -> dict:
         self._ensure_biscuit()
         body = {
             "name": name,
             "type_id": type_id,
-            "subscription_id": subscription_id,
+            "subscription_id": _prefixed_subscription_id(subscription_id),
             "external_id": external_id,
         }
         resp = self._request("POST", "/resource", json=body)

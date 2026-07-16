@@ -1,5 +1,6 @@
 import logging
 import time
+from urllib.parse import urlparse
 
 import requests
 
@@ -55,6 +56,60 @@ class LavaClient:
             return resp
 
         raise LavaError("Unreachable: retry loop exhausted.")
+
+    def get_device_tags(self, hostname: str) -> list[str]:
+        """
+        Return the list of tag *names* assigned to a device.
+
+        The LAVA REST API (v0.2) returns a device's tags as numeric tag IDs, so
+        we resolve those IDs to names via the tags endpoint. LMS-managed (Tier 3)
+        devices are tagged with their LAA name, subscription UUID and appliance
+        UUID, e.g. ["laa-00049", "sub-<uuid>", "dev-<uuid>"].
+        """
+        resp = self._request("GET", f"/api/v0.2/devices/{requests.utils.quote(hostname)}/")
+        raw_tags = resp.json().get("tags", []) or []
+
+        names: list[str] = []
+        unresolved_ids: list[int] = []
+        for tag in raw_tags:
+            # Some LAVA versions return tag names directly; handle both.
+            if isinstance(tag, str):
+                names.append(tag)
+            else:
+                unresolved_ids.append(tag)
+
+        if unresolved_ids:
+            id_to_name = self._tag_name_map()
+            for tag_id in unresolved_ids:
+                name = id_to_name.get(tag_id)
+                if name:
+                    names.append(name)
+
+        return names
+
+    def _tag_name_map(self) -> dict[int, str]:
+        """Build a {tag_id: tag_name} map from the LAVA tags endpoint."""
+        mapping: dict[int, str] = {}
+        path: str | None = "/api/v0.2/tags/?limit=1000"
+
+        while path:
+            resp = self._request("GET", path)
+            data = resp.json()
+            results = data.get("results", []) if isinstance(data, dict) else data
+            for tag in results or []:
+                tag_id = tag.get("id")
+                name = tag.get("name")
+                if tag_id is not None and name:
+                    mapping[tag_id] = name
+
+            next_url = data.get("next") if isinstance(data, dict) else None
+            if next_url:
+                parsed = urlparse(next_url)
+                path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+            else:
+                path = None
+
+        return mapping
 
     def submit_healthcheck(self, device: str) -> int:
         """Trigger a LAVA health check job for the given device. Returns the job ID."""
