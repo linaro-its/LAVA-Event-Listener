@@ -9,9 +9,16 @@ User=lava-listener
 Group=lava-listener
 WorkingDirectory=/opt/lava-event-listener
 ExecStart=/opt/lava-event-listener/.venv/bin/python -m lava_event_listener.main -c /etc/lava-event-listener/config.yaml
-Restart=on-failure
+Restart=always
 RestartSec=10
 StateDirectory=lava-event-listener
+
+# Memory limits (defense-in-depth on small instances).
+# If the listener ever runs away, systemd kills/restarts just this service
+# instead of letting the box hit a global OOM and lose network reachability.
+# Generous headroom — a healthy listener should never approach these.
+MemoryHigh=250M
+MemoryMax=300M
 
 # Hardening
 NoNewPrivileges=yes

@@ -22,6 +22,45 @@ A Python service that connects to LAVA CI server instances via websockets, monit
 sudo apt update && sudo apt install -y python3 python3-venv git
 ```
 
+### 2a. Prepare a small instance (swap + disable fwupd)
+
+The 512 MB plan has no swap by default, and Ubuntu ships the `fwupd`
+firmware-update daemon, which is useless on a VM but can balloon to
+150+ MB of RAM. On a 512 MB box this repeatedly triggers the kernel
+OOM killer, which can take networking down with it — surfacing as
+`StatusCheckFailed_Instance` alarms even though the OS is still "up".
+
+Disable `fwupd` (there is no physical firmware to update on a VM):
+
+```bash
+sudo systemctl stop fwupd
+sudo systemctl mask fwupd fwupd-refresh.service fwupd-refresh.timer
+```
+
+Add 1 GB of swap so any future memory spike degrades gracefully
+instead of triggering a global OOM:
+
+```bash
+sudo fallocate -l 1G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+sudo sysctl vm.swappiness=10
+echo 'vm.swappiness=10' | sudo tee /etc/sysctl.d/99-swappiness.conf
+```
+
+Optionally cap the journal so logs can't fill a small disk — edit
+`/etc/systemd/journald.conf`, set `SystemMaxUse=200M` under `[Journal]`,
+then `sudo systemctl restart systemd-journald`.
+
+Verify:
+
+```bash
+free -h                    # should show 1.0Gi of swap
+systemctl is-active fwupd  # should be inactive/unknown
+```
+
 ### 3. Clone the repository
 
 ```bash
@@ -135,6 +174,31 @@ sudo systemctl stop lava-event-listener
 # Check the current state file
 cat /var/lib/lava-event-listener/state.json
 ```
+
+## Troubleshooting: instance becomes unreachable / `StatusCheckFailed_Instance`
+
+On a small instance this is almost always memory-related. The OS often
+keeps running (and logging locally) while networking is starved, so it
+looks "up" but fails its reachability check. If you reboot the instance
+to recover, remember the crash evidence is in the **previous** boot:
+
+```bash
+# Look at the PREVIOUS boot, not the current one
+sudo journalctl -b -1 -k --no-pager | grep -i "killed process"
+```
+
+Any `Out of memory: Killed process ... (fwupd)` lines mean you still
+need Step 2a (disable fwupd + add swap). Check current memory headroom
+and the biggest consumers with:
+
+```bash
+free -h
+ps aux --sort=-%rss | head
+```
+
+The systemd unit also sets `MemoryHigh`/`MemoryMax` so that if the
+listener itself ever runs away, systemd restarts just the service
+rather than letting the whole box OOM.
 
 ## Running manually (for development/testing)
 
