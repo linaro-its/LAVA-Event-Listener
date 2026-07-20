@@ -31,7 +31,7 @@ class SlackClient:
 
     def send_shutdown(self):
         self._post_message({
-            "text": ":stop_sign: LAVA Event Listener shutting down.",
+            "text": ":octagonal_sign: LAVA Event Listener shutting down.",
         })
 
     def send_error(self, device: str, operation: str, error: str):
