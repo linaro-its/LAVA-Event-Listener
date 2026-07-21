@@ -103,6 +103,13 @@ class SpireClient:
             "subscription_id": _prefixed_subscription_id(subscription_id),
             "external_id": external_id,
         }
+        # Log the exact type_id/subscription being sent. A biscuit can restrict
+        # resource rights to a specific resourceType id; if this type_id doesn't
+        # match that restriction, SPIRE returns 401 even with full CRUD rights.
+        logger.info(
+            "Creating SPIRE resource '%s' (type_id=%s, subscription=%s, external_id=%s).",
+            name, type_id, body["subscription_id"], external_id,
+        )
         resp = self._request("POST", "/resource", json=body)
         return resp.json()["data"]
 
