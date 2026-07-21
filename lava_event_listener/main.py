@@ -110,6 +110,9 @@ def main():
     finally:
         if slack:
             slack.send_shutdown()
+            # Flush queued alerts and stop the background sender so nothing
+            # pending is lost on exit.
+            slack.close()
 
 
 if __name__ == "__main__":
