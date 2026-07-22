@@ -38,7 +38,22 @@ class SpireClient:
         self._ensure_biscuit()
         return self._biscuit
 
-    def get_resource_by_external_id(self, external_id: str) -> dict | None:
+    def get_resource_by_external_id(
+        self, external_id: str, active_only: bool = True
+    ) -> dict | None:
+        """Look up a SPIRE resource by its external_id.
+
+        By default only *active* resources are returned. Pass
+        ``active_only=False`` to also return resources in a non-active state
+        (``inactive``/``cancelled``).
+
+        This matters for idempotency: SPIRE enforces uniqueness on
+        (external_id, resource_type) across *all* states, so a resource that
+        still exists in a non-active state will make a create fail with a 409
+        even though it isn't active. A caller that is about to create must be
+        able to see those records, otherwise it treats them as absent, tries to
+        create, and hits the conflict.
+        """
         self._ensure_biscuit()
         try:
             resp = self._request(
@@ -46,7 +61,7 @@ class SpireClient:
                 f"/resource?external_id={requests.utils.quote(external_id)}",
             )
             resource = resp.json()["data"]
-            if resource.get("state") != "active":
+            if active_only and resource.get("state") != "active":
                 return None
             return resource
         except SpireError as exc:

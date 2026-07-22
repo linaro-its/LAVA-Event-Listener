@@ -36,6 +36,37 @@ def _tag_value(tags: list[str], prefix: str) -> str | None:
     return None
 
 
+def _is_external_id_conflict(exc: Exception) -> bool:
+    """True if a SpireError represents a duplicate-external_id 409 from SPIRE.
+
+    SPIRE returns HTTP 409 with the title "External ID already in use" when a
+    resource with the same (external_id, resource_type) already exists in any
+    state. Recognising it lets us treat a losing create-race as idempotent.
+    """
+    message = str(exc)
+    return "409" in message or "External ID already in use" in message
+
+
+def _describe_resource(resource: dict | None) -> str:
+    """Render the diagnostically-useful fields of a SPIRE resource for logs.
+
+    Surfaces the state, owning subscription and resource type so that a 409 can
+    be traced to whether the conflicting record is active (pointing at a
+    lookup/permission/encoding problem) or non-active (pointing at a
+    deactivation path), and which subscription/type it belongs to.
+    """
+    if not resource:
+        return "<none>"
+    subscription = resource.get("subscription") or {}
+    resource_type = resource.get("type") or {}
+    return (
+        f"id={resource.get('id')}, state={resource.get('state')}, "
+        f"subscription={subscription.get('id')}, "
+        f"type={resource_type.get('id') or resource_type.get('name')}, "
+        f"external_id={resource.get('external_id')!r}"
+    )
+
+
 class SpireHandler:
     def __init__(
         self,
@@ -115,13 +146,39 @@ class SpireHandler:
         # service catalogue, which needs a different right than creating the
         # resource), so lumping them under "create resource" hides the real
         # cause of a failure.
+        logger.info(
+            "[%s] Reconciling SPIRE resource in %s (subscription=%s, external_id=%r).",
+            device, env, subscription_id, external_id,
+        )
+
         operation = "look up resource"
         try:
+            # Look up in *any* state, not just active. SPIRE's uniqueness
+            # constraint on (external_id, resource_type) spans every state, so a
+            # lingering inactive/cancelled record with this external_id would
+            # otherwise be reported as absent here and then make the create
+            # below fail with a 409. Seeing it lets us stay idempotent.
             existing = await loop.run_in_executor(
-                None, spire.get_resource_by_external_id, external_id
+                None, spire.get_resource_by_external_id, external_id, False
             )
             if existing:
-                logger.info("SPIRE resource already exists for %s (id: %s), skipping.", device, existing["id"])
+                state = existing.get("state")
+                if state == "active":
+                    logger.info(
+                        "SPIRE resource already exists for %s, skipping. (%s)",
+                        device, _describe_resource(existing),
+                    )
+                else:
+                    # We can't reactivate via the API (PATCH doesn't accept
+                    # state and the record still holds the external_id), so
+                    # creating would just 409. Skip and let the authoritative
+                    # sync tool reconcile the resource's state.
+                    logger.warning(
+                        "SPIRE resource for %s already exists in non-active state; "
+                        "skipping create to avoid an external_id conflict. "
+                        "The sync tool will reconcile its state. (%s)",
+                        device, _describe_resource(existing),
+                    )
                 return
 
             operation = "resolve resource type"
@@ -141,6 +198,50 @@ class SpireHandler:
                 device, resource["id"], env, subscription_id,
             )
         except SpireError as exc:
+            # A create can still race another writer (the sync tool or a
+            # duplicate event) between our lookup and our create. Treat the
+            # resulting duplicate-external_id conflict as "already synced"
+            # rather than a failure worth alerting on — the resource exists.
+            if operation == "create resource" and _is_external_id_conflict(exc):
+                # Re-fetch the conflicting record (any state) and log exactly
+                # what we collided with. This is the key diagnostic for future
+                # 409s: it distinguishes an *active* conflict (our pre-create
+                # lookup should have found it — points at an encoding, biscuit
+                # scope, or resource-type mismatch) from a *non-active* one
+                # (points at a deactivation path), and names the owning
+                # subscription and type.
+                try:
+                    conflicting = await loop.run_in_executor(
+                        None, spire.get_resource_by_external_id, external_id, False
+                    )
+                except SpireError:
+                    logger.exception(
+                        "[%s] Could not re-fetch the resource that caused the "
+                        "external_id conflict (external_id=%r).",
+                        device, external_id,
+                    )
+                    conflicting = None
+
+                if conflicting and conflicting.get("state") == "active":
+                    # This is unexpected: the pre-create lookup used the same
+                    # external_id and should have seen this. Flag it loudly so
+                    # the lookup/create discrepancy gets investigated.
+                    logger.error(
+                        "[%s] external_id conflict on create but an ACTIVE resource "
+                        "with the same external_id exists — the pre-create lookup "
+                        "should have found it. Check external_id encoding, biscuit "
+                        "scope and resource type. (attempted external_id=%r, "
+                        "attempted subscription=%s; existing: %s)",
+                        device, external_id, subscription_id,
+                        _describe_resource(conflicting),
+                    )
+                else:
+                    logger.info(
+                        "SPIRE resource for %s already exists (external_id conflict on "
+                        "create); treating as already synced. (existing: %s)",
+                        device, _describe_resource(conflicting),
+                    )
+                return
             logger.exception("Failed during '%s' for SPIRE resource %s.", operation, device)
             self._alert_and_dead_letter(device, operation, str(exc), {
                 "server": server_name, "device": device, "device_type": device_type,
