@@ -109,6 +109,13 @@ class SpireHandler:
         spire = self._spire_prod if env == "production" else self._spire_staging
         external_id = self._build_external_id(server_name, device, appliance_uuid, device_type)
 
+        # Track which SPIRE call we're making so a failure is attributed to the
+        # right operation. These steps hit different endpoints with different
+        # permission requirements (e.g. the resource-type lookup reads the
+        # service catalogue, which needs a different right than creating the
+        # resource), so lumping them under "create resource" hides the real
+        # cause of a failure.
+        operation = "look up resource"
         try:
             existing = await loop.run_in_executor(
                 None, spire.get_resource_by_external_id, external_id
@@ -117,7 +124,10 @@ class SpireHandler:
                 logger.info("SPIRE resource already exists for %s (id: %s), skipping.", device, existing["id"])
                 return
 
+            operation = "resolve resource type"
             type_id = await loop.run_in_executor(None, spire.get_dut_type_id)
+
+            operation = "create resource"
             resource = await loop.run_in_executor(
                 None,
                 spire.create_resource,
@@ -131,8 +141,8 @@ class SpireHandler:
                 device, resource["id"], env, subscription_id,
             )
         except SpireError as exc:
-            logger.exception("Failed to create SPIRE resource for %s.", device)
-            self._alert_and_dead_letter(device, "create resource", str(exc), {
+            logger.exception("Failed during '%s' for SPIRE resource %s.", operation, device)
+            self._alert_and_dead_letter(device, operation, str(exc), {
                 "server": server_name, "device": device, "device_type": device_type,
                 "health": "Unknown", "timestamp": timestamp, "external_id": external_id,
             })
@@ -166,6 +176,7 @@ class SpireHandler:
         spire = self._spire_prod if env == "production" else self._spire_staging
         external_id = self._build_external_id(server_name, device, appliance_uuid, device_type)
 
+        operation = "look up resource (retired)"
         try:
             existing = await loop.run_in_executor(
                 None, spire.get_resource_by_external_id, external_id
@@ -174,14 +185,15 @@ class SpireHandler:
                 logger.info("No SPIRE resource found for retired device %s, nothing to delete.", device)
                 return
 
+            operation = "delete resource"
             await loop.run_in_executor(None, spire.delete_resource, existing["id"])
             logger.info(
                 "Deleted SPIRE resource for %s (id: %s, env: %s).",
                 device, existing["id"], env,
             )
         except SpireError as exc:
-            logger.exception("Failed to delete SPIRE resource for %s.", device)
-            self._alert_and_dead_letter(device, "delete resource", str(exc), {
+            logger.exception("Failed during '%s' for SPIRE resource %s.", operation, device)
+            self._alert_and_dead_letter(device, operation, str(exc), {
                 "server": server_name, "device": device, "device_type": device_type,
                 "health": "Retired", "timestamp": timestamp, "external_id": external_id,
             })
