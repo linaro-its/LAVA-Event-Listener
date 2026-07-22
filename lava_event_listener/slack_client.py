@@ -50,7 +50,10 @@ class SlackClient:
         self._last_alert_times: dict[str, float] = {}
         self._suppressed_count: int = 0
         self._suppressed_details: list[str] = []
-        self._last_summary_time: float = 0
+        # When the current batch of suppressed failures began. The digest is
+        # only emitted once a full rate-limit window has elapsed since this,
+        # so a lone suppressed failure doesn't trigger an instant summary.
+        self._suppression_started_at: float = 0
 
         # Background delivery.
         self._session = requests.Session()
@@ -151,6 +154,8 @@ class SlackClient:
         return (time.time() - last) < self._rate_limit_seconds
 
     def _record_suppressed(self, device: str, operation: str):
+        if self._suppressed_count == 0:
+            self._suppression_started_at = time.time()
         self._suppressed_count += 1
         detail = f"{device} ({operation})"
         if detail not in self._suppressed_details:
@@ -159,7 +164,13 @@ class SlackClient:
                 self._suppressed_details.pop(0)
 
     def _maybe_send_summary(self):
-        if (time.time() - self._last_summary_time) < self._rate_limit_seconds:
+        # Only emit a digest once a full rate-limit window has accumulated
+        # since the first suppressed failure in this batch. This prevents a
+        # near-instant "1 failure suppressed" summary from firing right after
+        # the original alert; low-volume batches are instead flushed on close().
+        if self._suppressed_count == 0:
+            return
+        if (time.time() - self._suppression_started_at) < self._rate_limit_seconds:
             return
         self._flush_pending_summary()
 
@@ -184,7 +195,7 @@ class SlackClient:
         })
         self._suppressed_count = 0
         self._suppressed_details = []
-        self._last_summary_time = time.time()
+        self._suppression_started_at = 0
 
     # ------------------------------------------------------------------ #
     # Background delivery                                                #
