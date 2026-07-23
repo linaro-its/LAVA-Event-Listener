@@ -25,17 +25,48 @@ class LmsClient:
     def get_appliance_by_name(self, name: str) -> dict | None:
         try:
             resp = self._request("GET", f"/appliances?name={requests.utils.quote(name)}")
-            data = resp.json()
-            items = data.get("data", data) if isinstance(data, dict) else data
-            if isinstance(items, list) and items:
-                return items[0]
-            if isinstance(items, dict) and items.get("id"):
-                return items
-            return None
+            appliances = self._appliances_from_response(resp.json())
         except LmsError as exc:
             if "404" in str(exc):
                 return None
             raise
+
+        if not appliances:
+            return None
+
+        # Prefer an exact name match. The LMS `name` query filter may not be
+        # honoured server-side (the sync tool deliberately fetches all
+        # appliances and matches client-side rather than trusting it), so we
+        # must not assume the first row returned is the appliance we asked for.
+        for appliance in appliances:
+            if str(appliance.get("name", "")).lower() == name.lower():
+                return appliance
+
+        # If the server returned exactly one appliance, treat it as the match
+        # (it filtered for us, possibly under a name field we don't recognise).
+        # More than one with no name match is ambiguous, so don't guess.
+        if len(appliances) == 1:
+            return appliances[0]
+        return None
+
+    @staticmethod
+    def _appliances_from_response(data) -> list[dict]:
+        """Normalise the LMS /appliances response into a list of appliance dicts.
+
+        LMS returns a paginated envelope: ``{"results": [...], "next": ...}``.
+        Handle that plus the shapes other/older endpoints may use — a
+        ``{"data": [...]}`` envelope, a bare list, or a single appliance object.
+        """
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            for key in ("results", "data"):
+                value = data.get(key)
+                if isinstance(value, list):
+                    return value
+            if data.get("id"):  # a single appliance object, not an envelope
+                return [data]
+        return []
 
     def get_appliance_subscription(self, appliance_id: str) -> str | None:
         try:

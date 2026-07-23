@@ -66,7 +66,16 @@ class LavaClient:
         devices are tagged with their LAA name, subscription UUID and appliance
         UUID, e.g. ["laa-00049", "sub-<uuid>", "dev-<uuid>"].
         """
-        resp = self._request("GET", f"/api/v0.2/devices/{requests.utils.quote(hostname)}/")
+        # Pass all=true so retired devices are still returned. The LAVA REST API
+        # (DeviceViewSet.get_queryset) excludes health=Retired devices from the
+        # queryset unless this flag is set, so a plain lookup 404s for a device
+        # that has just been retired — which is exactly when a Retired event
+        # fires and we need to read its sub-/dev- tags to reconcile SPIRE.
+        resp = self._request(
+            "GET",
+            f"/api/v0.2/devices/{requests.utils.quote(hostname)}/",
+            params={"all": "true"},
+        )
         raw_tags = resp.json().get("tags", []) or []
 
         names: list[str] = []

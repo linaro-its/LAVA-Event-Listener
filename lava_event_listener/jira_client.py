@@ -175,6 +175,53 @@ class JiraClient:
         )
         logger.info("Added comment to %s.", issue_key)
 
+    @staticmethod
+    def is_comment_limit_error(exc: Exception) -> bool:
+        """True if a JiraError is Jira's per-issue comment-limit rejection.
+
+        Jira returns HTTP 413 with 'COMMENTS_PER_ISSUE_LIMIT_EXCEEDED' once an
+        issue reaches its 5000-comment cap. We match the specific marker rather
+        than the bare 413 so an oversized single comment isn't misclassified.
+        """
+        return "COMMENTS_PER_ISSUE_LIMIT_EXCEEDED" in str(exc)
+
+    def close_ticket(self, issue_key: str) -> bool:
+        """Best-effort transition of an issue to a terminal ('done') status.
+
+        Used when rolling a full ticket over to a follow-on. Returns True if a
+        terminal transition was applied, False if none was available. Does not
+        add a comment (the ticket is typically full at this point).
+        """
+        resp = self._request("GET", f"/rest/api/3/issue/{issue_key}/transitions")
+        transitions = resp.json().get("transitions", [])
+
+        target = next(
+            (t for t in transitions
+             if t.get("to", {}).get("statusCategory", {}).get("key") == "done"),
+            None,
+        )
+        if not target:
+            wanted = {"done", "close", "closed", "resolve", "resolved", "cancel", "cancelled", "complete", "completed"}
+            target = next(
+                (t for t in transitions if t.get("name", "").strip().lower() in wanted),
+                None,
+            )
+        if not target:
+            available = [t.get("name") for t in transitions]
+            logger.warning(
+                "No terminal transition available for %s; leaving it open. Available: %s",
+                issue_key, available,
+            )
+            return False
+
+        self._request(
+            "POST",
+            f"/rest/api/3/issue/{issue_key}/transitions",
+            json={"transition": {"id": target["id"]}},
+        )
+        logger.info("Closed ticket %s via transition '%s'.", issue_key, target.get("name"))
+        return True
+
     def get_issue_status(self, issue_key: str) -> str | None:
         try:
             resp = self._request("GET", f"/rest/servicedeskapi/request/{issue_key}")

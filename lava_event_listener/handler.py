@@ -15,6 +15,10 @@ LAA_LIFECYCLE_HEALTH = {"Unknown", "Retired"}
 BAD_WORKER_HEALTH = {"Maintenance", "Retired"}
 BAD_WORKER_STATE = {"Offline"}
 
+# Jira's hard cap on comments per issue. When a long-lived ticket hits this,
+# we roll over to a follow-on ticket rather than losing updates.
+JIRA_COMMENT_LIMIT = 5000
+
 
 class EventHandler:
     def __init__(
@@ -78,6 +82,59 @@ class EventHandler:
         except JiraError:
             logger.exception("Jira error handling event for %s.", device_id)
 
+    async def _comment_or_rollover(
+        self, loop, ticket_key, comment, *, entity_label, server_name
+    ) -> str:
+        """Add a comment to ``ticket_key``, rolling over to a new ticket if the
+        original has reached Jira's per-issue comment limit.
+
+        On the limit being hit, a follow-on ticket is opened (referencing the
+        original), participants are re-added, the comment is posted there, and
+        the full ticket is closed best-effort. Returns the ticket key the
+        comment ultimately landed on, so the caller can persist it in state.
+        """
+        try:
+            await loop.run_in_executor(None, self._jira.add_comment, ticket_key, comment)
+            return ticket_key
+        except JiraError as exc:
+            if not self._jira.is_comment_limit_error(exc):
+                raise
+
+        logger.warning(
+            "Ticket %s reached Jira's %d-comment limit; opening a follow-on ticket for %s.",
+            ticket_key, JIRA_COMMENT_LIMIT, entity_label,
+        )
+        summary = f"[LAVA] {entity_label} on {server_name} (continued)"
+        description = (
+            f"Follow-on ticket for {entity_label} on {server_name}.\n"
+            f"Continuing from {ticket_key}, which reached Jira's "
+            f"{JIRA_COMMENT_LIMIT}-comment limit.\n\n"
+            f"This ticket was created automatically by the LAVA Event Listener."
+        )
+        new_key = await loop.run_in_executor(
+            None, self._jira.create_ticket, summary, description
+        )
+        logger.info("Created follow-on ticket %s (previous: %s).", new_key, ticket_key)
+
+        srv_config = self._servers.get(server_name)
+        if srv_config and srv_config.participants:
+            await loop.run_in_executor(
+                None, self._jira.add_participants, new_key, srv_config.participants
+            )
+
+        await loop.run_in_executor(
+            None, self._jira.add_comment, new_key, f"(Continued from {ticket_key})\n{comment}"
+        )
+
+        # Closing the full ticket is best-effort — the follow-on already exists,
+        # so a failure here must not break event handling.
+        try:
+            await loop.run_in_executor(None, self._jira.close_ticket, ticket_key)
+        except JiraError:
+            logger.warning("Could not close full ticket %s after rollover to %s.", ticket_key, new_key)
+
+        return new_key
+
     async def _handle_bad_health(
         self, loop, device_id, device, device_type, server_name, health, device_state, timestamp
     ):
@@ -94,13 +151,12 @@ class EventHandler:
                         f"Device {device} on {server_name} health changed "
                         f"from {existing.health} to {health} at {timestamp}."
                     )
-                    await loop.run_in_executor(
-                        None, self._jira.add_comment, existing.ticket_key, comment
+                    ticket_key = await self._comment_or_rollover(
+                        loop, existing.ticket_key, comment,
+                        entity_label=device, server_name=server_name,
                     )
-                    self._state.set_device(
-                        device_id, existing.ticket_key, health, timestamp
-                    )
-                    logger.info("Updated %s for %s: %s -> %s", existing.ticket_key, device_id, existing.health, health)
+                    self._state.set_device(device_id, ticket_key, health, timestamp)
+                    logger.info("Updated %s for %s: %s -> %s", ticket_key, device_id, existing.health, health)
                 return
 
         summary = f"[LAVA] {device}: {health} on {server_name}"
@@ -223,11 +279,12 @@ class EventHandler:
                 f"Device {device} on {server_name} has recovered. "
                 f"Health is now Good as of {timestamp}."
             )
-            await loop.run_in_executor(
-                None, self._jira.add_comment, existing.ticket_key, comment
+            ticket_key = await self._comment_or_rollover(
+                loop, existing.ticket_key, comment,
+                entity_label=device, server_name=server_name,
             )
-            self._state.set_device(device_id, existing.ticket_key, "Good", timestamp)
-            logger.info("Added recovery comment to %s for %s.", existing.ticket_key, device_id)
+            self._state.set_device(device_id, ticket_key, "Good", timestamp)
+            logger.info("Added recovery comment to %s for %s.", ticket_key, device_id)
         else:
             self._state.remove_device(device_id)
             logger.info("Ticket %s is closed, removing %s from state.", existing.ticket_key, device_id)
@@ -271,15 +328,16 @@ class EventHandler:
                         f"from health={existing.health}, state={existing.state} "
                         f"to health={health}, state={worker_state} at {timestamp}."
                     )
-                    await loop.run_in_executor(
-                        None, self._jira.add_comment, existing.ticket_key, comment
+                    ticket_key = await self._comment_or_rollover(
+                        loop, existing.ticket_key, comment,
+                        entity_label=f"Worker {worker}", server_name=server_name,
                     )
                     self._state.set_worker(
-                        worker_id, existing.ticket_key, health, worker_state, timestamp
+                        worker_id, ticket_key, health, worker_state, timestamp
                     )
                     logger.info(
                         "Updated %s for %s: health=%s state=%s -> health=%s state=%s",
-                        existing.ticket_key, worker_id,
+                        ticket_key, worker_id,
                         existing.health, existing.state, health, worker_state,
                     )
                 return
@@ -320,11 +378,12 @@ class EventHandler:
                 f"Worker {worker} on {server_name} has recovered. "
                 f"Health is Active and state is Online as of {timestamp}."
             )
-            await loop.run_in_executor(
-                None, self._jira.add_comment, existing.ticket_key, comment
+            ticket_key = await self._comment_or_rollover(
+                loop, existing.ticket_key, comment,
+                entity_label=f"Worker {worker}", server_name=server_name,
             )
-            self._state.set_worker(worker_id, existing.ticket_key, "Active", "Online", timestamp)
-            logger.info("Added recovery comment to %s for %s.", existing.ticket_key, worker_id)
+            self._state.set_worker(worker_id, ticket_key, "Active", "Online", timestamp)
+            logger.info("Added recovery comment to %s for %s.", ticket_key, worker_id)
         else:
             self._state.remove_worker(worker_id)
             logger.info("Ticket %s is closed, removing %s from state.", existing.ticket_key, worker_id)
