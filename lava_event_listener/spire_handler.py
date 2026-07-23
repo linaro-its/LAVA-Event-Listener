@@ -124,8 +124,11 @@ class SpireHandler:
             env, subscription_id, appliance_uuid = await loop.run_in_executor(
                 None, self._resolve_subscription, server_name, device, laa_name
             )
-        except _UnresolvedSubscription:
-            logger.warning("Could not resolve subscription for %s on %s.", device, server_name)
+        except _UnresolvedSubscription as exc:
+            logger.warning(
+                "Could not resolve subscription for %s on %s. Diagnostics: %s",
+                device, server_name, exc.diagnostics_summary(),
+            )
             if self._slack and self._slack_config and self._slack_config.alert_on_unresolved_subscription:
                 self._slack.send_unresolved_subscription(device)
             return
@@ -261,8 +264,11 @@ class SpireHandler:
             env, subscription_id, appliance_uuid = await loop.run_in_executor(
                 None, self._resolve_subscription, server_name, device, laa_name
             )
-        except _UnresolvedSubscription:
-            logger.warning("Could not resolve subscription for retired device %s on %s.", device, server_name)
+        except _UnresolvedSubscription as exc:
+            logger.warning(
+                "Could not resolve subscription for retired device %s on %s. Diagnostics: %s",
+                device, server_name, exc.diagnostics_summary(),
+            )
             if self._slack and self._slack_config and self._slack_config.alert_on_unresolved_subscription:
                 self._slack.send_unresolved_subscription(device)
             return
@@ -328,11 +334,15 @@ class SpireHandler:
 
         Raises _UnresolvedSubscription if neither path resolves.
         """
-        tags = self._get_device_tags(server_name, device)
+        diagnostics: list[str] = []
+        tags = self._get_device_tags(server_name, device, diagnostics)
         subscription_id = _tag_value(tags, SUBSCRIPTION_TAG_PREFIX)
         appliance_uuid = _tag_value(tags, APPLIANCE_TAG_PREFIX)
 
         if subscription_id:
+            diagnostics.append(
+                f"found sub tag {subscription_id} (appliance tag={appliance_uuid or 'none'})"
+            )
             logger.info(
                 "[%s] Resolved subscription %s from LAVA device tags (appliance=%s).",
                 device, subscription_id, appliance_uuid or "unknown",
@@ -340,22 +350,32 @@ class SpireHandler:
             env = self._env_for_subscription(device, subscription_id)
             if env:
                 return (env, subscription_id, appliance_uuid or "")
+            diagnostics.append(
+                f"subscription {subscription_id} from tag not found in production or staging SPIRE"
+            )
             logger.info(
                 "[%s] Subscription %s from tags not found in any SPIRE environment; "
                 "falling back to LMS lookup.",
                 device, subscription_id,
             )
         else:
+            diagnostics.append(f"no sub-* tag on device (tags={tags})")
             logger.info(
                 "[%s] No subscription tag on LAVA device; falling back to LMS lookup for '%s'.",
                 device, laa_name,
             )
 
-        return self._resolve_subscription_via_lms(device, laa_name)
+        return self._resolve_subscription_via_lms(device, laa_name, diagnostics)
 
-    def _get_device_tags(self, server_name: str, device: str) -> list[str]:
+    def _get_device_tags(
+        self, server_name: str, device: str, diagnostics: list[str] | None = None
+    ) -> list[str]:
         lava = self._lava_clients.get(server_name)
         if not lava:
+            if diagnostics is not None:
+                diagnostics.append(
+                    f"no LAVA client configured for server '{server_name}' (cannot read tags)"
+                )
             logger.info(
                 "[%s] No LAVA client configured for server '%s'; cannot read device tags.",
                 device, server_name,
@@ -366,6 +386,8 @@ class SpireHandler:
             logger.info("[%s] LAVA device tags: %s", device, tags)
             return tags
         except LavaError as exc:
+            if diagnostics is not None:
+                diagnostics.append(f"failed to read LAVA device tags: {exc}")
             logger.info("[%s] Failed to read LAVA device tags: %s", device, exc)
             return []
 
@@ -380,66 +402,64 @@ class SpireHandler:
                 logger.info("[%s] %s SPIRE subscription check failed: %s", device, env, exc)
         return None
 
-    def _resolve_subscription_via_lms(self, device: str, laa_name: str) -> tuple[str, str, str]:
+    def _resolve_subscription_via_lms(
+        self, device: str, laa_name: str, diagnostics: list[str] | None = None
+    ) -> tuple[str, str, str]:
         """
         Legacy resolution: find the LAA appliance in LMS by name and read its
         subscription. Kept as a fallback for devices that are not tagged.
         Returns (environment, subscription_id, appliance_uuid).
         Raises _UnresolvedSubscription if not found in either environment.
         """
-        # Try production first
-        try:
-            logger.info("[%s] Trying production LMS for appliance '%s'...", device, laa_name)
-            appliance = self._lms_prod.get_appliance_by_name(laa_name)
-            if appliance:
-                logger.info("[%s] Production LMS found appliance: id=%s", device, appliance.get("id"))
+        diagnostics = diagnostics if diagnostics is not None else []
+
+        for env, lms, spire in (
+            ("production", self._lms_prod, self._spire_prod),
+            ("staging", self._lms_staging, self._spire_staging),
+        ):
+            try:
+                logger.info("[%s] Trying %s LMS for appliance '%s'...", device, env, laa_name)
+                appliance = lms.get_appliance_by_name(laa_name)
+                if not appliance:
+                    diagnostics.append(f"{env} LMS: appliance '{laa_name}' not found")
+                    logger.info("[%s] Appliance '%s' not found in %s LMS.", device, laa_name, env)
+                    continue
+
+                logger.info("[%s] %s LMS found appliance: id=%s", device, env, appliance.get("id"))
                 subscription_id = (
                     appliance.get("subscription_id")
                     or appliance.get("subscription", {}).get("id")
                 )
                 appliance_uuid = appliance.get("id", "")
-                if subscription_id:
-                    logger.info("[%s] Appliance has subscription_id=%s, verifying in production SPIRE...", device, subscription_id)
-                    sub = self._spire_prod.get_subscription(subscription_id)
-                    if sub:
-                        logger.info("[%s] Resolved: production, subscription=%s, appliance=%s", device, subscription_id, appliance_uuid)
-                        return ("production", subscription_id, appliance_uuid)
-                    else:
-                        logger.info("[%s] Subscription %s not found in production SPIRE.", device, subscription_id)
-                else:
-                    logger.info("[%s] Production appliance has no subscription_id. Raw: %s", device, appliance)
-            else:
-                logger.info("[%s] Appliance '%s' not found in production LMS.", device, laa_name)
-        except (LmsError, SpireError) as exc:
-            logger.info("[%s] Production lookup failed: %s", device, exc)
+                if not subscription_id:
+                    diagnostics.append(f"{env} LMS: appliance {appliance_uuid} has no subscription_id")
+                    logger.info("[%s] %s appliance has no subscription_id. Raw: %s", device, env, appliance)
+                    continue
 
-        # Try staging
-        try:
-            logger.info("[%s] Trying staging LMS for appliance '%s'...", device, laa_name)
-            appliance = self._lms_staging.get_appliance_by_name(laa_name)
-            if appliance:
-                logger.info("[%s] Staging LMS found appliance: id=%s", device, appliance.get("id"))
-                subscription_id = (
-                    appliance.get("subscription_id")
-                    or appliance.get("subscription", {}).get("id")
+                logger.info(
+                    "[%s] Appliance has subscription_id=%s, verifying in %s SPIRE...",
+                    device, subscription_id, env,
                 )
-                appliance_uuid = appliance.get("id", "")
-                if subscription_id:
-                    logger.info("[%s] Appliance has subscription_id=%s, verifying in staging SPIRE...", device, subscription_id)
-                    sub = self._spire_staging.get_subscription(subscription_id)
-                    if sub:
-                        logger.info("[%s] Resolved: staging, subscription=%s, appliance=%s", device, subscription_id, appliance_uuid)
-                        return ("staging", subscription_id, appliance_uuid)
-                    else:
-                        logger.info("[%s] Subscription %s not found in staging SPIRE.", device, subscription_id)
-                else:
-                    logger.info("[%s] Staging appliance has no subscription_id. Raw: %s", device, appliance)
-            else:
-                logger.info("[%s] Appliance '%s' not found in staging LMS.", device, laa_name)
-        except (LmsError, SpireError) as exc:
-            logger.info("[%s] Staging lookup failed: %s", device, exc)
+                if spire.get_subscription(subscription_id):
+                    logger.info(
+                        "[%s] Resolved: %s, subscription=%s, appliance=%s",
+                        device, env, subscription_id, appliance_uuid,
+                    )
+                    return (env, subscription_id, appliance_uuid)
 
-        raise _UnresolvedSubscription(f"Subscription not found for device {device} (LAA: {laa_name})")
+                diagnostics.append(
+                    f"{env} LMS: appliance {appliance_uuid} -> subscription {subscription_id} "
+                    f"not found in {env} SPIRE"
+                )
+                logger.info("[%s] Subscription %s not found in %s SPIRE.", device, subscription_id, env)
+            except (LmsError, SpireError) as exc:
+                diagnostics.append(f"{env} lookup failed: {exc}")
+                logger.info("[%s] %s lookup failed: %s", device, env, exc)
+
+        raise _UnresolvedSubscription(
+            f"Subscription not found for device {device} (LAA: {laa_name})",
+            diagnostics,
+        )
 
     def _alert_and_dead_letter(self, device: str, operation: str, error: str, event_data: dict):
         if self._slack:
@@ -448,4 +468,17 @@ class SpireHandler:
 
 
 class _UnresolvedSubscription(Exception):
-    pass
+    """Raised when a device's subscription cannot be resolved.
+
+    Carries a step-by-step ``diagnostics`` trail describing everything that was
+    tried (tags read, SPIRE subscription checks, LMS lookups) so the failure can
+    be understood from a single consolidated log line rather than by stitching
+    together the individual INFO-level breadcrumbs.
+    """
+
+    def __init__(self, message: str, diagnostics: list[str] | None = None):
+        super().__init__(message)
+        self.diagnostics = diagnostics or []
+
+    def diagnostics_summary(self) -> str:
+        return " | ".join(self.diagnostics) if self.diagnostics else "no diagnostics captured"
